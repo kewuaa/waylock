@@ -45,19 +45,6 @@ unlocked.
 	key is pressed. Instead, do nothing. This may be useful if, for
 	example, the Enter key is used to wake the computer from sleep.
 
-*-init-color* _0xRRGGBB_
-	Set the initial color. (default: 0x002b36)
-
-*-input-color* _0xRRGGBB_
-	Set the color used after input. (default: 0x6c71c4)
-
-*-input-alt-color* _0xRRGGBB_
-	Set the alternate color used after input. (default is what
-	*-input-color* is set to)
-
-*-fail-color* _0xRRGGBB_
-	Set the color used on authentication failure. (default: 0xdc322f)
-
 # USAGE
 
 Run the waylock executable to lock the session. All monitors will be blanked

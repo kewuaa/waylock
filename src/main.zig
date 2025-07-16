@@ -22,11 +22,6 @@ const usage =
     \\  -ready-fd <fd>             Write a newline to fd after locking.
     \\  -ignore-empty-password     Do not validate an empty password.
     \\
-    \\  -init-color 0xRRGGBB       Set the initial color.
-    \\  -input-color 0xRRGGBB      Set the color used after input.
-    \\  -input-alt-color 0xRRGGBB  Set the alternate color used after input.
-    \\  -fail-color 0xRRGGBB       Set the color used on authentication failure.
-    \\
 ;
 
 pub fn main() void {
@@ -37,10 +32,6 @@ pub fn main() void {
         .{ .name = "fork-on-lock", .kind = .boolean },
         .{ .name = "ready-fd", .kind = .arg },
         .{ .name = "ignore-empty-password", .kind = .boolean },
-        .{ .name = "init-color", .kind = .arg },
-        .{ .name = "input-color", .kind = .arg },
-        .{ .name = "input-alt-color", .kind = .arg },
-        .{ .name = "fail-color", .kind = .arg },
     }).parse(std.os.argv[1..]) catch {
         io.getStdErr().writeAll(usage) catch {};
         posix.exit(1);
@@ -84,13 +75,6 @@ pub fn main() void {
             posix.exit(1);
         };
     }
-    if (result.flags.@"init-color") |raw| options.init_color = parse_color(raw);
-    if (result.flags.@"input-color") |raw| {
-        options.input_color = parse_color(raw);
-        options.input_alt_color = parse_color(raw);
-    }
-    if (result.flags.@"input-alt-color") |raw| options.input_alt_color = parse_color(raw);
-    if (result.flags.@"fail-color") |raw| options.fail_color = parse_color(raw);
 
     Lock.run(options);
 }
@@ -132,4 +116,9 @@ fn logFn(
 
     const stderr = io.getStdErr().writer();
     stderr.print(level.asText() ++ ": " ++ format ++ "\n", args) catch {};
+}
+
+
+test "test all" {
+    _ = @import("image.zig");
 }

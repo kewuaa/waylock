@@ -80,13 +80,16 @@ pub fn build(b: *Build) !void {
     scanner.addSystemProtocol("staging/ext-session-lock/ext-session-lock-v1.xml");
     scanner.addSystemProtocol("staging/single-pixel-buffer/single-pixel-buffer-v1.xml");
     scanner.addSystemProtocol("stable/viewporter/viewporter.xml");
+    scanner.addCustomProtocol(b.path("protocol/wlr-screencopy-unstable-v1.xml"));
 
     scanner.generate("wl_compositor", 4);
     scanner.generate("wl_output", 3);
     scanner.generate("wl_seat", 5);
+    scanner.generate("wl_shm", 2);
     scanner.generate("ext_session_lock_manager_v1", 1);
     scanner.generate("wp_viewporter", 1);
     scanner.generate("wp_single_pixel_buffer_manager_v1", 1);
+    scanner.generate("zwlr_screencopy_manager_v1", 3);
 
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
     const xkbcommon = b.dependency("xkbcommon", .{}).module("xkbcommon");
@@ -112,4 +115,26 @@ pub fn build(b: *Build) !void {
     waylock.pie = pie;
 
     b.installArtifact(waylock);
+
+    const run_cmd = b.addRunArtifact(waylock);
+    run_cmd.step.dependOn(b.getInstallStep());
+
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    const run_step = b.step("run", "run waylock");
+    run_step.dependOn(&run_cmd.step);
+
+    const test_exe = b.addTest(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize
+    });
+    test_exe.root_module.addImport("wayland", wayland);
+
+    const run_test = b.addRunArtifact(test_exe);
+    run_test.skip_foreign_checks = true;
+    const test_step = b.step("test", "run test");
+    test_step.dependOn(&run_test.step);
 }

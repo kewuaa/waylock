@@ -11,6 +11,7 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const wp = wayland.client.wp;
 const ext = wayland.client.ext;
+const zwlr = wayland.client.zwlr;
 
 const xkb = @import("xkbcommon");
 
@@ -25,7 +26,6 @@ const gpa = std.heap.c_allocator;
 pub const Color = enum {
     init,
     input,
-    input_alt,
     fail,
 };
 
@@ -33,19 +33,6 @@ pub const Options = struct {
     fork_on_lock: bool,
     ready_fd: ?posix.fd_t = null,
     ignore_empty_password: bool,
-    init_color: u24 = 0x002b36,
-    input_color: u24 = 0x6c71c4,
-    input_alt_color: u24 = 0x6c71c4,
-    fail_color: u24 = 0xdc322f,
-
-    fn rgb(options: Options, color: Color) u24 {
-        return switch (color) {
-            .init => options.init_color,
-            .input => options.input_color,
-            .input_alt => options.input_alt_color,
-            .fail => options.fail_color,
-        };
-    }
 };
 
 state: enum {
@@ -71,11 +58,10 @@ pollfds: [2]posix.pollfd,
 
 display: *wl.Display,
 compositor: ?*wl.Compositor = null,
+shm: ?*wl.Shm = null,
 session_lock_manager: ?*ext.SessionLockManagerV1 = null,
 session_lock: ?*ext.SessionLockV1 = null,
-viewporter: ?*wp.Viewporter = null,
-buffer_manager: ?*wp.SinglePixelBufferManagerV1 = null,
-buffers: [4]*wl.Buffer,
+screencopy_manager: ?*zwlr.ScreencopyManagerV1 = null,
 
 seats: std.SinglyLinkedList(Seat) = .{},
 outputs: std.SinglyLinkedList(Output) = .{},
@@ -93,7 +79,6 @@ pub fn run(options: Options) void {
         .display = wl.Display.connect(null) catch |err| {
             fatal("failed to connect to a wayland compositor: {s}", .{@errorName(err)});
         },
-        .buffers = undefined,
         .xkb_context = xkb.Context.new(.no_flags) orelse fatal_oom(),
         .password = PasswordBuffer.init(),
         .auth_connection = auth.fork_child() catch |err| {
@@ -129,12 +114,29 @@ pub fn run(options: Options) void {
 
     if (lock.compositor == null) fatal_not_advertised(wl.Compositor);
     if (lock.session_lock_manager == null) fatal_not_advertised(ext.SessionLockManagerV1);
-    if (lock.viewporter == null) fatal_not_advertised(wp.Viewporter);
-    if (lock.buffer_manager == null) fatal_not_advertised(wp.SinglePixelBufferManagerV1);
+    if (lock.shm == null) fatal_not_advertised(wl.Shm);
+    if (lock.screencopy_manager == null) fatal_not_advertised(zwlr.ScreencopyManagerV1);
 
-    lock.buffers = create_buffers(lock.buffer_manager.?, options) catch fatal_oom();
-    lock.buffer_manager.?.destroy();
-    lock.buffer_manager = null;
+    {
+        var it = lock.outputs.first;
+        while (it) |node| {
+            it = node.next;
+            node.data.create_screencopy_frame() catch {
+                log.err("failed to create screencopy frame", .{});
+                node.data.destroy();
+                continue;
+            };
+        }
+    }
+    {
+        var it = lock.outputs.first;
+        while (it) |node| {
+            it = node.next;
+            while (!node.data.buffer.done and lock.display.dispatch() == .SUCCESS) {
+                //
+            }
+        }
+    }
 
     lock.session_lock = lock.session_lock_manager.?.lock() catch fatal_oom();
     lock.session_lock.?.setListener(*Lock, session_lock_listener, &lock);
@@ -255,10 +257,7 @@ fn flush_wayland_and_prepare_read(lock: *Lock) void {
 /// Clean up resources just so we can better use tooling such as valgrind to check for leaks.
 fn deinit(lock: *Lock) void {
     if (lock.compositor) |compositor| compositor.destroy();
-    if (lock.viewporter) |viewporter| viewporter.destroy();
-    for (lock.buffers) |buffer| buffer.destroy();
 
-    assert(lock.buffer_manager == null);
     assert(lock.session_lock_manager == null);
     assert(lock.session_lock == null);
 
@@ -293,6 +292,8 @@ fn registry_event(lock: *Lock, registry: *wl.Registry, event: wl.Registry.Event)
                     fatal("advertised wl_compositor version too old, version 4 required", .{});
                 }
                 lock.compositor = try registry.bind(ev.name, wl.Compositor, 4);
+            } else if (mem.orderZ(u8, ev.interface, wl.Shm.interface.name) == .eq) {
+                lock.shm = try registry.bind(ev.name, wl.Shm, 2);
             } else if (mem.orderZ(u8, ev.interface, ext.SessionLockManagerV1.interface.name) == .eq) {
                 lock.session_lock_manager = try registry.bind(ev.name, ext.SessionLockManagerV1, 1);
             } else if (mem.orderZ(u8, ev.interface, wl.Output.interface.name) == .eq) {
@@ -330,10 +331,8 @@ fn registry_event(lock: *Lock, registry: *wl.Registry, event: wl.Registry.Event)
 
                 node.data.init(lock, ev.name, wl_seat);
                 lock.seats.prepend(node);
-            } else if (mem.orderZ(u8, ev.interface, wp.Viewporter.interface.name) == .eq) {
-                lock.viewporter = try registry.bind(ev.name, wp.Viewporter, 1);
-            } else if (mem.orderZ(u8, ev.interface, wp.SinglePixelBufferManagerV1.interface.name) == .eq) {
-                lock.buffer_manager = try registry.bind(ev.name, wp.SinglePixelBufferManagerV1, 1);
+            } else if (mem.orderZ(u8, ev.interface, zwlr.ScreencopyManagerV1.interface.name) == .eq) {
+                lock.screencopy_manager = try registry.bind(ev.name, zwlr.ScreencopyManagerV1, 3);
             }
         },
         .global_remove => |ev| {
@@ -423,7 +422,8 @@ pub fn set_color(lock: *Lock, color: Color) void {
 
     var it = lock.outputs.first;
     while (it) |node| : (it = node.next) {
-        node.data.attach_buffer(lock.buffers[@intFromEnum(lock.color)]);
+        // node.data.attach_buffer(lock.buffers[@intFromEnum(lock.color)]);
+        node.data.switch_color(color);
     }
 }
 
@@ -438,23 +438,6 @@ fn fatal_oom() noreturn {
 
 fn fatal_not_advertised(comptime Global: type) noreturn {
     fatal("{s} not advertised", .{Global.interface.name});
-}
-
-fn create_buffers(
-    buffer_manager: *wp.SinglePixelBufferManagerV1,
-    options: Options,
-) error{OutOfMemory}![4]*wl.Buffer {
-    var buffers: [4]*wl.Buffer = undefined;
-    for ([_]Color{ .init, .input, .input_alt, .fail }) |color| {
-        const rgb = options.rgb(color);
-        buffers[@intFromEnum(color)] = try buffer_manager.createU32RgbaBuffer(
-            @as(u32, (rgb >> 16) & 0xff) * (0xffff_ffff / 0xff),
-            @as(u32, (rgb >> 8) & 0xff) * (0xffff_ffff / 0xff),
-            @as(u32, (rgb >> 0) & 0xff) * (0xffff_ffff / 0xff),
-            0xffff_ffff,
-        );
-    }
-    return buffers;
 }
 
 // TODO: Upstream this to the Zig standard library
