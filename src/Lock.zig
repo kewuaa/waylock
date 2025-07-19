@@ -293,7 +293,7 @@ fn registry_event(lock: *Lock, registry: *wl.Registry, event: wl.Registry.Event)
                 }
                 lock.compositor = try registry.bind(ev.name, wl.Compositor, 4);
             } else if (mem.orderZ(u8, ev.interface, wl.Shm.interface.name) == .eq) {
-                lock.shm = try registry.bind(ev.name, wl.Shm, 2);
+                lock.shm = try registry.bind(ev.name, wl.Shm, 1);
             } else if (mem.orderZ(u8, ev.interface, ext.SessionLockManagerV1.interface.name) == .eq) {
                 lock.session_lock_manager = try registry.bind(ev.name, ext.SessionLockManagerV1, 1);
             } else if (mem.orderZ(u8, ev.interface, wl.Output.interface.name) == .eq) {
