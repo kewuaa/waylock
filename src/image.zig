@@ -4,54 +4,50 @@ const log = std.log.scoped(.Image);
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
 
+pub const Channel = enum {
+    A, R, G, B
+};
 const Pixel = struct {
     const Self = @This();
-
     data: *[4]u8,
     info: *const PixelInfo,
 
-    pub inline fn a(self: *const Self) ?u8 {
-        return if (self.info.a_offset) |offset| self.data[offset] else null;
+    pub inline fn get(self: *const Self, comptime chan: Channel) if (chan == .A) ?u8 else u8 {
+        return switch (chan) {
+            .A => if (self.info.a_offset) |offset| self.data[offset] else null,
+            else => self.data[self.info.offset(chan)]
+        };
     }
 
-    pub inline fn r(self: *const Self) u8 {
-        return self.data[self.info.r_offset];
-    }
-
-    pub inline fn g(self: *const Self) u8 {
-        return self.data[self.info.g_offset];
-    }
-
-    pub inline fn b(self: *const Self) u8 {
-        return self.data[self.info.b_offset];
-    }
-
-    pub inline fn set_a(self: *Self, A: u8) void {
-        if (self.info.a_offset) |offset| {
-            self.data[offset] = A;
-        } else {
-            log.warn("try to set channal A while it not exists", .{});
+    pub inline fn set(self: *Self, comptime chan: Channel, v: u8) void {
+        switch (chan) {
+            .A => {
+                if (self.info.offset(.A)) |offset| {
+                    self.data[offset] = v;
+                } else {
+                    log.warn("try to set channal A while it not exists", .{});
+                }
+            },
+            else => self.data[self.info.offset(chan)] = v
         }
-    }
-
-    pub inline fn set_r(self: *Self, R: u8) void {
-        self.data[self.info.r_offset] = R;
-    }
-
-    pub inline fn set_g(self: *Self, G: u8) void {
-        self.data[self.info.g_offset] = G;
-    }
-
-    pub inline fn set_b(self: *Self, B: u8) void {
-        self.data[self.info.b_offset] = B;
     }
 };
 const PixelInfo = struct {
+    const Self = @This();
+
     a_offset: ?u2,
     r_offset: u2,
     g_offset: u2,
     b_offset: u2,
     chan_num: usize = 4,
+
+    pub inline fn offset(self: *const Self, comptime chan: Channel) if (chan == .A) ?u2 else u2 {
+        return @field(
+            self,
+            [_]u8 { (@tagName(chan)[0]+'a'-'A') } ++ "_offset"
+        );
+    }
+
 };
 
 pub const Image = struct {
@@ -147,30 +143,30 @@ fn blur_h(dst: *Image, src: *const Image, radius: usize) void {
         var b_sum: u32 = 0;
         for (0..radius) |col| {
             const pixcel = src.at(row, col);
-            r_sum += pixcel.r();
-            g_sum += pixcel.g();
-            b_sum += pixcel.b();
+            r_sum += pixcel.get(.R);
+            g_sum += pixcel.get(.G);
+            b_sum += pixcel.get(.B);
         }
         var range = radius;
         for (0..src.width) |col| {
             if (col >= radius) {
                 const pixel = src.at(row, col-radius);
-                r_sum -= pixel.r();
-                g_sum -= pixel.g();
-                b_sum -= pixel.b();
+                r_sum -= pixel.get(.R);
+                g_sum -= pixel.get(.G);
+                b_sum -= pixel.get(.B);
                 range -= 1;
             }
             if (col < src.width-radius) {
                 const pixel = src.at(row, col+radius);
-                r_sum += pixel.r();
-                g_sum += pixel.g();
-                b_sum += pixel.b();
+                r_sum += pixel.get(.R);
+                g_sum += pixel.get(.G);
+                b_sum += pixel.get(.B);
                 range += 1;
             }
             var pixel = dst.at(row, col);
-            pixel.set_r(@intCast(r_sum/range));
-            pixel.set_g(@intCast(g_sum/range));
-            pixel.set_b(@intCast(b_sum/range));
+            pixel.set(.R, @intCast(r_sum/range));
+            pixel.set(.G, @intCast(g_sum/range));
+            pixel.set(.B, @intCast(b_sum/range));
         }
     }
 }
@@ -185,30 +181,30 @@ fn blur_v(dst: *Image, src: *const Image, radius: usize) void {
         var b_sum: u32 = 0;
         for (0..radius) |row| {
             const pixcel = src.at(row, col);
-            r_sum += pixcel.r();
-            g_sum += pixcel.g();
-            b_sum += pixcel.b();
+            r_sum += pixcel.get(.R);
+            g_sum += pixcel.get(.G);
+            b_sum += pixcel.get(.B);
         }
         var range = radius;
         for (0..src.height) |row| {
             if (row >= radius) {
                 const pixel = src.at(row-radius, col);
-                r_sum -= pixel.r();
-                g_sum -= pixel.g();
-                b_sum -= pixel.b();
+                r_sum -= pixel.get(.R);
+                g_sum -= pixel.get(.G);
+                b_sum -= pixel.get(.B);
                 range -= 1;
             }
             if (row < src.height-radius) {
                 const pixel = src.at(row+radius, col);
-                r_sum += pixel.r();
-                g_sum += pixel.g();
-                b_sum += pixel.b();
+                r_sum += pixel.get(.R);
+                g_sum += pixel.get(.G);
+                b_sum += pixel.get(.B);
                 range += 1;
             }
             var pixel = dst.at(row, col);
-            pixel.set_r(@intCast(r_sum/range));
-            pixel.set_g(@intCast(g_sum/range));
-            pixel.set_b(@intCast(b_sum/range));
+            pixel.set(.R, @intCast(r_sum/range));
+            pixel.set(.G, @intCast(g_sum/range));
+            pixel.set(.B, @intCast(b_sum/range));
         }
     }
 }
@@ -219,14 +215,10 @@ test "Image" {
         5, 6, 7, 8,
         9, 10, 11, 12,
     };
-    var image: Image(.bgrx8888) = undefined;
-    image.data = @ptrCast(&data);
-    image.width = 1;
-    image.height = 3;
-    image.stride = 4;
+    const image = Image.create(.bgrx888, @ptrCast(&data), 1, 3, 4);
     const pixcel = image.at(1, 0);
-    try std.testing.expect(pixcel.A == 255);
-    try std.testing.expect(pixcel.R == 6);
-    try std.testing.expect(pixcel.G == 7);
-    try std.testing.expect(pixcel.B == 8);
+    try std.testing.expect(pixcel.get(.A) == 255);
+    try std.testing.expect(pixcel.get(.R) == 6);
+    try std.testing.expect(pixcel.get(.G) == 7);
+    try std.testing.expect(pixcel.get(.B) == 8);
 }

@@ -149,7 +149,7 @@ pub fn switch_color(output: *Output, color: Lock.Color) void {
             for (0..img.height) |row| {
                 for (0..img.width) |col| {
                     var pixel = img.at(row, col);
-                    pixel.set_r(255);
+                    pixel.set(.R, 255);
                 }
             }
         },
@@ -159,12 +159,10 @@ pub fn switch_color(output: *Output, color: Lock.Color) void {
                     var pixel = img.at(row, col);
                     var ov: struct {u8, u1} = undefined;
 
-                    ov = @mulWithOverflow(pixel.r(), 2);
-                    pixel.set_r(if (ov[1] == 0) ov[0] else 255);
-                    ov = @mulWithOverflow(pixel.g(), 2);
-                    pixel.set_g(if (ov[1] == 0) ov[0] else 255);
-                    ov = @mulWithOverflow(pixel.b(), 2);
-                    pixel.set_b(if (ov[1] == 0) ov[0] else 255);
+                    inline for ([_]image.Channel { .R, .G, .B }) |chan| {
+                        ov = @mulWithOverflow(pixel.get(chan), 2);
+                        pixel.set(chan, if (ov[1] == 0) ov[0] else 255);
+                    }
                 }
             }
         }
