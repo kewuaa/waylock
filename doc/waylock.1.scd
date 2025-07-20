@@ -40,11 +40,6 @@ unlocked.
 	close the _fd_. This is useful if a fork-less lock notification is needed;
 	for example, for integration with a service manager.
 
-*-ignore-empty-password*
-	Do not submit empty passwords to PAM for validation when the Enter
-	key is pressed. Instead, do nothing. This may be useful if, for
-	example, the Enter key is used to wake the computer from sleep.
-
 # USAGE
 
 Run the waylock executable to lock the session. All monitors will be blanked

@@ -32,7 +32,6 @@ pub const Color = enum {
 pub const Options = struct {
     fork_on_lock: bool,
     ready_fd: ?posix.fd_t = null,
-    ignore_empty_password: bool,
 };
 
 state: enum {
@@ -52,7 +51,6 @@ color: Color = .init,
 
 fork_on_lock: bool,
 ready_fd: ?posix.fd_t,
-ignore_empty_password: bool,
 
 pollfds: [2]posix.pollfd,
 
@@ -74,7 +72,6 @@ pub fn run(options: Options) void {
     var lock: Lock = .{
         .fork_on_lock = options.fork_on_lock,
         .ready_fd = options.ready_fd,
-        .ignore_empty_password = options.ignore_empty_password,
         .pollfds = undefined,
         .display = wl.Display.connect(null) catch |err| {
             fatal("failed to connect to a wayland compositor: {s}", .{@errorName(err)});
@@ -398,7 +395,7 @@ fn session_lock_listener(_: *ext.SessionLockV1, event: ext.SessionLockV1.Event, 
 pub fn submit_password(lock: *Lock) void {
     assert(lock.state == .locked);
 
-    if (lock.ignore_empty_password and lock.password.buffer.len == 0) {
+    if (lock.password.buffer.len == 0) {
         log.info("ignoring submission of empty password", .{});
         return;
     }
