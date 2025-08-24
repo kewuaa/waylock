@@ -29,6 +29,7 @@ lock: *Lock,
 name: u32,
 wl_output: *wl.Output,
 surface: ?*wl.Surface = null,
+viewport: ?*wp.Viewport = null,
 lock_surface: ?*ext.SessionLockSurfaceV1 = null,
 screencopy_frame: ?*zwlr.ScreencopyFrameV1 = null,
 
@@ -53,6 +54,8 @@ pub fn create_surface(output: *Output) !void {
     const surface = try output.lock.compositor.?.createSurface();
     output.surface = surface;
 
+    output.viewport = try output.lock.viewporter.?.getViewport(surface);
+
     const lock_surface = try output.lock.session_lock.?.getLockSurface(surface, output.wl_output);
     lock_surface.setListener(*Output, lock_surface_listener, output);
     output.lock_surface = lock_surface;
@@ -67,6 +70,7 @@ pub fn create_screencopy_frame(output: *Output) !void {
 
 pub fn destroy(output: *Output) void {
     output.wl_output.release();
+    if (output.viewport) |viewport| viewport.destroy();
     if (output.lock_surface) |lock_surface| lock_surface.destroy();
     if (output.surface) |surface| surface.destroy();
     if (output.screencopy_frame) |frame| frame.destroy();
@@ -221,5 +225,6 @@ fn attach_buffer(output: *Output, buffer: *wl.Buffer) void {
     if (!output.configured) return;
     output.surface.?.attach(buffer, 0, 0);
     output.surface.?.damageBuffer(0, 0, math.maxInt(i32), math.maxInt(i32));
+    output.viewport.?.setDestination(output.width, output.height);
     output.surface.?.commit();
 }

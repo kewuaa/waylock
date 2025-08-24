@@ -59,6 +59,7 @@ compositor: ?*wl.Compositor = null,
 shm: ?*wl.Shm = null,
 session_lock_manager: ?*ext.SessionLockManagerV1 = null,
 session_lock: ?*ext.SessionLockV1 = null,
+viewporter: ?*wp.Viewporter = null,
 screencopy_manager: ?*zwlr.ScreencopyManagerV1 = null,
 
 seats: std.SinglyLinkedList(Seat) = .{},
@@ -111,6 +112,7 @@ pub fn run(options: Options) void {
 
     if (lock.compositor == null) fatal_not_advertised(wl.Compositor);
     if (lock.session_lock_manager == null) fatal_not_advertised(ext.SessionLockManagerV1);
+    if (lock.viewporter == null) fatal_not_advertised(wp.Viewporter);
     if (lock.shm == null) fatal_not_advertised(wl.Shm);
     if (lock.screencopy_manager == null) fatal_not_advertised(zwlr.ScreencopyManagerV1);
 
@@ -254,6 +256,7 @@ fn flush_wayland_and_prepare_read(lock: *Lock) void {
 /// Clean up resources just so we can better use tooling such as valgrind to check for leaks.
 fn deinit(lock: *Lock) void {
     if (lock.compositor) |compositor| compositor.destroy();
+    if (lock.viewporter) |viewporter| viewporter.destroy();
 
     assert(lock.session_lock_manager == null);
     assert(lock.session_lock == null);
@@ -289,6 +292,8 @@ fn registry_event(lock: *Lock, registry: *wl.Registry, event: wl.Registry.Event)
                     fatal("advertised wl_compositor version too old, version 4 required", .{});
                 }
                 lock.compositor = try registry.bind(ev.name, wl.Compositor, 4);
+            } else if (mem.orderZ(u8, ev.interface, wp.Viewporter.interface.name) == .eq) {
+                lock.viewporter = try registry.bind(ev.name, wp.Viewporter, 1);
             } else if (mem.orderZ(u8, ev.interface, wl.Shm.interface.name) == .eq) {
                 lock.shm = try registry.bind(ev.name, wl.Shm, 1);
             } else if (mem.orderZ(u8, ev.interface, ext.SessionLockManagerV1.interface.name) == .eq) {
