@@ -50,6 +50,8 @@ buffer: struct {
     }
 } = undefined,
 
+link: wl.list.Link,
+
 pub fn create_surface(output: *Output) !void {
     const surface = try output.lock.compositor.?.createSurface();
     output.surface = surface;
@@ -77,9 +79,8 @@ pub fn destroy(output: *Output) void {
 
     output.buffer.destroy();
 
-    const node: *std.SinglyLinkedList(Output).Node = @fieldParentPtr("data", output);
-    output.lock.outputs.remove(node);
-    gpa.destroy(node);
+    output.link.remove();
+    gpa.destroy(output);
 }
 
 fn lock_surface_listener(

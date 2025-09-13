@@ -62,8 +62,8 @@ session_lock: ?*ext.SessionLockV1 = null,
 viewporter: ?*wp.Viewporter = null,
 screencopy_manager: ?*zwlr.ScreencopyManagerV1 = null,
 
-seats: std.SinglyLinkedList(Seat) = .{},
-outputs: std.SinglyLinkedList(Output) = .{},
+seats: wl.list.Head(Seat, .link),
+outputs: wl.list.Head(Output, .link),
 
 xkb_context: *xkb.Context,
 password: PasswordBuffer,
@@ -77,6 +77,8 @@ pub fn run(options: Options) void {
         .display = wl.Display.connect(null) catch |err| {
             fatal("failed to connect to a wayland compositor: {s}", .{@errorName(err)});
         },
+        .seats = undefined,
+        .outputs = undefined,
         .xkb_context = xkb.Context.new(.no_flags) orelse fatal_oom(),
         .password = PasswordBuffer.init(),
         .auth_connection = auth.fork_child() catch |err| {
@@ -84,6 +86,9 @@ pub fn run(options: Options) void {
         },
     };
     defer lock.deinit();
+
+    lock.seats.init();
+    lock.outputs.init();
 
     const poll_wayland = 0;
     const poll_auth = 1;
@@ -117,21 +122,19 @@ pub fn run(options: Options) void {
     if (lock.screencopy_manager == null) fatal_not_advertised(zwlr.ScreencopyManagerV1);
 
     {
-        var it = lock.outputs.first;
-        while (it) |node| {
-            it = node.next;
-            node.data.create_screencopy_frame() catch {
+        var it = lock.outputs.iterator(.forward);
+        while (it.next()) |output| {
+            output.create_screencopy_frame() catch {
                 log.err("failed to create screencopy frame", .{});
-                node.data.destroy();
+                output.destroy();
                 continue;
             };
         }
     }
     {
-        var it = lock.outputs.first;
-        while (it) |node| {
-            it = node.next;
-            while (!node.data.buffer.done and lock.display.dispatch() == .SUCCESS) {
+        var it = lock.outputs.iterator(.forward);
+        while (it.next()) |output| {
+            while (!output.buffer.done and lock.display.dispatch() == .SUCCESS) {
                 //
             }
         }
@@ -148,14 +151,11 @@ pub fn run(options: Options) void {
     lock.state = .locking;
 
     {
-        var it = lock.outputs.first;
-        while (it) |node| {
-            // Do this up front in case the node gets removed.
-            it = node.next;
-            node.data.create_surface() catch {
+        var it = lock.outputs.safeIterator(.forward);
+        while (it.next()) |output| {
+            output.create_surface() catch {
                 log.err("out of memory", .{});
-                // Removes the node from the list.
-                node.data.destroy();
+                output.destroy();
                 continue;
             };
         }
@@ -178,10 +178,12 @@ pub fn run(options: Options) void {
         }
 
         if (lock.pollfds[poll_auth].revents & posix.POLL.IN != 0) {
-            const byte = lock.auth_connection.reader().readByte() catch |err| {
+            var byte: [1]u8 = undefined;
+            var reader = lock.auth_connection.reader();
+            reader.interface.readSliceAll(&byte) catch |err| {
                 fatal("failed to read response from child authentication process: {s}", .{@errorName(err)});
             };
-            switch (byte) {
+            switch (byte[0]) {
                 @intFromBool(true) => {
                     lock.session_lock.?.unlockAndDestroy();
                     lock.session_lock = null;
@@ -191,7 +193,7 @@ pub fn run(options: Options) void {
                     lock.set_color(.fail);
                 },
                 else => {
-                    fatal("unexpected response received from child authentication process: {d}", .{byte});
+                    fatal("unexpected response received from child authentication process: {d}", .{byte[0]});
                 },
             }
         }
@@ -261,8 +263,8 @@ fn deinit(lock: *Lock) void {
     assert(lock.session_lock_manager == null);
     assert(lock.session_lock == null);
 
-    while (lock.seats.first) |node| node.data.destroy();
-    while (lock.outputs.first) |node| node.data.destroy();
+    while (lock.seats.first()) |seat| seat.destroy();
+    while (lock.outputs.first()) |output| output.destroy();
 
     lock.display.disconnect();
 
@@ -306,19 +308,20 @@ fn registry_event(lock: *Lock, registry: *wl.Registry, event: wl.Registry.Event)
                 const wl_output = try registry.bind(ev.name, wl.Output, 3);
                 errdefer wl_output.release();
 
-                const node = try gpa.create(std.SinglyLinkedList(Output).Node);
-                errdefer node.data.destroy();
+                const output = try gpa.create(Output);
+                errdefer output.destroy();
 
-                node.data = .{
+                output.* = .{
                     .lock = lock,
                     .name = ev.name,
                     .wl_output = wl_output,
+                    .link = undefined,
                 };
-                lock.outputs.prepend(node);
+                lock.outputs.prepend(output);
 
                 switch (lock.state) {
                     .initializing, .exiting => {},
-                    .locking, .locked => try node.data.create_surface(),
+                    .locking, .locked => try output.create_surface(),
                 }
             } else if (mem.orderZ(u8, ev.interface, wl.Seat.interface.name) == .eq) {
                 // Version 5 required for wl_seat.release
@@ -328,30 +331,26 @@ fn registry_event(lock: *Lock, registry: *wl.Registry, event: wl.Registry.Event)
                 const wl_seat = try registry.bind(ev.name, wl.Seat, 5);
                 errdefer wl_seat.release();
 
-                const node = try gpa.create(std.SinglyLinkedList(Seat).Node);
-                errdefer gpa.destroy(node);
-
-                node.data.init(lock, ev.name, wl_seat);
-                lock.seats.prepend(node);
+                try Seat.create(lock, ev.name, wl_seat);
             } else if (mem.orderZ(u8, ev.interface, zwlr.ScreencopyManagerV1.interface.name) == .eq) {
                 lock.screencopy_manager = try registry.bind(ev.name, zwlr.ScreencopyManagerV1, 3);
             }
         },
         .global_remove => |ev| {
             {
-                var it = lock.outputs.first;
-                while (it) |node| : (it = node.next) {
-                    if (node.data.name == ev.name) {
-                        node.data.destroy();
+                var it = lock.outputs.safeIterator(.forward);
+                while (it.next()) |output| {
+                    if (output.name == ev.name) {
+                        output.destroy();
                         break;
                     }
                 }
             }
             {
-                var it = lock.seats.first;
-                while (it) |node| : (it = node.next) {
-                    if (node.data.name == ev.name) {
-                        node.data.destroy();
+                var it = lock.seats.safeIterator(.forward);
+                while (it.next()) |seat| {
+                    if (seat.name == ev.name) {
+                        seat.destroy();
                         break;
                     }
                 }
@@ -412,9 +411,10 @@ pub fn submit_password(lock: *Lock) void {
 
 fn send_password_to_auth(lock: *Lock) !void {
     defer lock.password.clear();
-    const writer = lock.auth_connection.writer();
-    try writer.writeInt(u32, @as(u32, @intCast(lock.password.buffer.len)), builtin.cpu.arch.endian());
-    try writer.writeAll(lock.password.buffer);
+    var writer = lock.auth_connection.writer();
+    const len_bytes: [4]u8 = @bitCast(@as(u32, @intCast(lock.password.buffer.len)));
+    try writer.interface.writeAll(&len_bytes);
+    try writer.interface.writeAll(lock.password.buffer);
 }
 
 pub fn set_color(lock: *Lock, color: Color) void {
@@ -422,10 +422,10 @@ pub fn set_color(lock: *Lock, color: Color) void {
 
     lock.color = color;
 
-    var it = lock.outputs.first;
-    while (it) |node| : (it = node.next) {
-        // node.data.attach_buffer(lock.buffers[@intFromEnum(lock.color)]);
-        node.data.switch_color(color);
+    var it = lock.outputs.iterator(.forward);
+    while (it.next()) |output| {
+        // output.attach_buffer(lock.buffers[@intFromEnum(lock.color)]);
+        output.switch_color(color);
     }
 }
 

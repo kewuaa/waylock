@@ -96,9 +96,11 @@ pub fn build(b: *Build) !void {
 
     const waylock = b.addExecutable(.{
         .name = "waylock",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     waylock.root_module.addOptions("build_options", options);
 
@@ -127,9 +129,11 @@ pub fn build(b: *Build) !void {
     run_step.dependOn(&run_cmd.step);
 
     const test_exe = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize
+        })
     });
     test_exe.root_module.addImport("wayland", wayland);
 
