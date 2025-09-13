@@ -210,14 +210,14 @@ fn blur_v(dst: *Image, src: *const Image, radius: usize) void {
 }
 
 test "Image" {
-    const data = [_]u8 {
+    var data = [_]u8 {
         1, 2, 3, 4,
         5, 6, 7, 8,
         9, 10, 11, 12,
     };
-    const image = Image.create(.bgrx888, @ptrCast(&data), 1, 3, 4);
+    const image = Image.create(.bgrx8888, @ptrCast(&data), 1, 3, 4);
     const pixcel = image.at(1, 0);
-    try std.testing.expect(pixcel.get(.A) == 255);
+    try std.testing.expect(pixcel.get(.A) == null);
     try std.testing.expect(pixcel.get(.R) == 6);
     try std.testing.expect(pixcel.get(.G) == 7);
     try std.testing.expect(pixcel.get(.B) == 8);
